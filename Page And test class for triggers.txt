@@ -1,0 +1,168 @@
+<apex:page controller="HotelRemoter">
+
+<head>
+<style type="text/css">
+  html { height: 100% }
+  body { height: 100%; margin: 0; padding: 0 }
+  #map-canvas { width:800px;height:600px; }
+</style>
+<script src="https://maps.googleapis.com/maps/api/js?sensor=false"></script>
+<script>
+var map;
+
+function initialize() {
+    var mapOptions = {
+        center: new google.maps.LatLng(37.784173, -122.401557),
+        zoom: 15
+    };
+    map = new google.maps.Map(document.getElementById("map-canvas"), mapOptions);
+    loadHotels();
+}
+ function loadHotels() {
+    Visualforce.remoting.Manager.invokeAction('{!$RemoteAction.HotelRemoter.findAll}',
+        function(result, event){
+            if (event.status) {
+                for (var i=0; i<result.length; i++) {
+                    var id = result[i].Id;
+                    var name = result[i].Name;
+                    var lat = result[i].Location__Latitude__s;
+                    var lng = result[i].Location__Longitude__s;
+                    addMarker(id, name, lat, lng);
+                }
+            } else {
+                alert(event.message);
+            }
+        },
+        {escape: true}
+    );
+}   
+    function addMarker(id, name, lat, lng) {
+    var marker = new google.maps.Marker({
+            position: new google.maps.LatLng(lat, lng),
+            map: map,
+            title: name
+    });
+    google.maps.event.addListener(marker, 'click', function(event) {
+        window.top.location = '/' + id;
+    });
+}
+
+google.maps.event.addDomListener(window, 'load', initialize);
+
+</script>
+</head>
+<body>
+  <div id="map-canvas"/>
+</body>
+
+</apex:page>
+
+global with sharing class HotelRemoter
+{
+  @RemoteAction
+    global static  List<Hotel__c> findAll()
+    {
+        return [select id, name,Location__Latitude__s,Location__Longitude__s from Hotel__c];
+    }
+}
+
+<apex:page standardController="Speaker__c" extensions="SpeakerControllerExtension">
+<apex:form >
+    <apex:pageBlock title="Edit Speaker">
+        <apex:pageBlockSection columns="1">
+            <apex:inputField value="{!Speaker__c.First_Name__c}"/>
+            <apex:inputField value="{!Speaker__c.Last_Name__c}"/>
+            <apex:inputField value="{!Speaker__c.Email__c}"/>
+            <apex:inputFile value="{!picture}" accept="image/*" />
+        </apex:pageBlockSection>
+        <apex:pageBlockButtons >
+            <apex:commandButton action="{!save}" value="Save"/>
+        </apex:pageBlockButtons>
+    </apex:pageBlock>
+    {!errorMessage}
+</apex:form>
+</apex:page>
+
+public class SpeakerControllerExtension 
+{
+      public blob picture { get; set; }
+    public String errorMessage { get; set; }
+
+    private final Speaker__c speaker;
+    private ApexPages.StandardController stdController;
+
+    public SpeakerControllerExtension(ApexPages.StandardController stdController) {
+        this.speaker = (Speaker__c)stdController.getRecord();
+        this.stdController = stdController;
+    }
+
+    public PageReference save() {
+        errorMessage = '';
+        try {
+            upsert speaker;
+            if (picture != null) {
+                Attachment attachment = new Attachment();
+                attachment.body = picture;
+                attachment.name = 'speaker_' + speaker.id + '.jpg';
+                attachment.parentid = speaker.id;
+                attachment.ContentType = 'application/jpg';
+                insert attachment;
+                speaker.Picture_Path__c = '/servlet/servlet.FileDownload?file='
+                                          + attachment.id;
+                update speaker;
+            }
+            return new ApexPages.StandardController(speaker).view();
+        } catch(System.Exception ex) {
+            errorMessage = ex.getMessage();
+            return null;
+        }
+    }
+}
+
+@isTest
+public class TestRejectDoubleBooking
+{
+    //good scenario
+    static testmethod void TestSingleBooking() {
+    Datetime now = System.now();
+
+    Speaker__c speaker = new Speaker__c(First_Name__c='John', Last_Name__c='Smith');
+    insert speaker;
+
+    Session__c session = new Session__c(Name='Human Resources', Session_Date__c=now);
+    insert session;
+
+    Session_Speaker__c assignment =
+        new Session_Speaker__c(Session__c=session.Id, Speaker__c=speaker.Id);
+    Test.startTest();
+    Database.SaveResult result = Database.insert(assignment, false);
+    Test.stopTest();
+
+    System.assert(result.isSuccess());
+}
+    
+    static testmethod void TestDoubleBooking() {
+    Datetime now = System.now();
+
+    Speaker__c speaker = new Speaker__c(First_Name__c='John', Last_Name__c='Smith');
+    insert speaker;
+
+    Session__c session1 = new Session__c(Name='Session 1', Session_Date__c=now);
+    insert session1;
+    Session__c session2 = new Session__c(Name='Session 2', Session_Date__c=now);
+    insert session2;
+
+    Session_Speaker__c assignment1 =
+        new Session_Speaker__c(Session__c=session1.Id, Speaker__c=speaker.Id);
+    insert assignment1;
+
+    Session_Speaker__c assignment2 =
+        new Session_Speaker__c(Session__c=session2.Id, Speaker__c=speaker.Id);
+    Test.startTest();
+    Database.SaveResult result = Database.insert(assignment2, false);
+    Test.stopTest();
+
+    System.assert(!result.isSuccess());
+}
+
+}
